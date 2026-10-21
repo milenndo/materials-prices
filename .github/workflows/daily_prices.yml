@@ -1,0 +1,35 @@
+name: Daily Price Update
+
+on:
+  schedule:
+    - cron: '0 4 * * *' # Стартира се всяка сутрин в 06:00/07:00 ч. българско време
+  workflow_dispatch: # Позволява ръчно пускане с бутон
+
+permissions:
+  contents: write
+
+jobs:
+  update-prices:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Изтегляне на хранилището
+        uses: actions/checkout@v4
+
+      - name: Инсталиране на Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Инсталиране на библиотеки
+        run: pip install requests beautifulsoup4
+
+      - name: Стартиране на скрипта за цени
+        run: python scraper.py
+
+      - name: Записване на новите цени в prices.json
+        run: |
+          git config --global user.name "PriceBot"
+          git config --global user.email "bot@noreply.github.com"
+          git add prices.json
+          git diff --staged --quiet || git commit -m "Автоматично обновяване на цените"
+          git push
