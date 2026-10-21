@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+    <meta charset="UTF-8">
+    <title>Калкулатор за строителни материали</title>
+    <!-- Библиотека за четене на Excel файлове директно в браузъра -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background: #f4f6f9; color: #333; }
+        .container { max-width: 950px; margin: auto; background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        h2 { margin-top: 0; color: #1a202c; }
+        textarea { width: 100%; height: 110px; margin-bottom: 12px; padding: 10px; border: 1px solid #cbd5e0; border-radius: 6px; font-family: inherit; box-sizing: border-box; }
+        .controls { display: flex; gap: 15px; align-items: center; margin-bottom: 20px; flex-wrap: wrap; }
+        button { background: #2b6cb0; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-size: 15px; font-weight: 600; }
+        button:hover { background: #2c5282; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 14px; }
+        th, td { border: 1px solid #e2e8f0; padding: 10px; text-align: left; }
+        th { background: #edf2f7; color: #4a5568; }
+        .best-price { background: #c6f6d5; font-weight: bold; color: #22543d; }
+        .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 15px; margin-top: 20px; }
+        .card { padding: 15px; background: #ebf8ff; border-left: 5px solid #3182ce; border-radius: 6px; }
+        .card.winner { background: #f0fff4; border-left-color: #38a169; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>📦 Оптимизатор на оферти и цени (Сухо строителство)</h2>
+    <p>Напишете необходимите материали (по един на ред: <i>Име - Количество</i>) или качете Excel/CSV оферта:</p>
+    
+    <textarea id="manualInput" placeholder="Пример:
+Стандартен гипсокартон 12.5 - 15
+Влагоустойчив гипсокартон - 10
+Профил CD 60 - 40
+Профил UD 28 - 20
+Шпакловка Norgips - 3"></textarea>
+    
+    <div class="controls">
+        <div>
+            <label for="fileUpload"><b>📄 Или качете Excel (.xlsx / .csv):</b> </label>
+            <input type="file" id="fileUpload" accept=".xlsx, .xls, .csv" />
+        </div>
+        <button onclick="processInput()">🔍 Изчисли най-добрата оферта</button>
+    </div>
+
+    <div id="results"></div>
+</div>
+
+<script>
+// 1. БАЗА ДАННИ С ПРОДУКТИ И КЛЮЧОВИ ДУМИ ЗА РАЗПОЗНАВАНЕ
+// Може да се зарежда автоматично от външен prices.json файл чрез fetch('prices.json')
+const catalogDB = [
+    {
+        id: "GK_STD_12.5",
+        name: "Стандартен гипсокартон Knauf/Norgips 12.5мм (1200x2000)",
+        keywords: ["стандартен", "обикновен", "бял", "a13", "gkb", "12.5"],
+        unit: "бр.",
+        prices: { "Баущоф + Метал": 6.52, "Топливо": 7.16, "Ташев-Галвинг": 7.43 }
+    },
+    {
+        id: "GK_STD_9.5",
+        name: "Стандартен гипсокартон 9.5мм (1200x2000)",
+        keywords: ["9.5", "a10", "таван"],
+        unit: "бр.",
+        prices: { "Баущоф + Метал": 6.14, "Топливо": 7.79, "Ташев-Галвинг": 7.15 }
+    },
+    {
+        id: "GK_VLAG_12.5",
+        name: "Влагоустойчив гипсокартон (зелен) 12.5мм (1200x2000)",
+        keywords: ["влагоустойчив", "зелен", "h13", "gkbi", "h2", "баня"],
+        unit: "бр.",
+        prices: { "Баущоф + Метал": 9.91, "Топливо": 10.57, "Ташев-Галвинг": 10.95 }
+    },
+    {
+        id: "GK_FIRE_12.5",
+        name: "Пожароустойчив гипсокартон (розов) 12.5мм (1200x2000)",
+        keywords: ["пожароустойчив", "огнеупорен", "розов", "червен", "df", "gkf"],
+        unit: "бр.",
+        prices: { "Баущоф + Метал": 11.50, "Топливо": 11.94, "Ташев-Галвинг": 10.62 }
+    },
+    {
+        id: "PROF_CD_60",
+        name: "Профил CD 60/27 (3.0 м)",
+        keywords: ["cd", "цд", "60/27", "60"],
+        unit: "бр.",
+        prices: { "Баущоф + Метал": 3.20, "Топливо": 3.15, "Ташев-Галвинг": 3.05 }
+    },
+    {
+        id: "PROF_UD_28",
+        name: "Профил UD 28/27 (3.0 м)",
+        keywords: ["ud", "уд", "28/27", "28"],
+        unit: "бр.",
+        prices: { "Баущоф + Метал": 1.95, "Топливо": 1.90, "Ташев-Галвинг": 1.79 }
+    },
+    {
+        id: "SHPAKLOVKA_20KG",
+        name: "Готова шпакловка кофа (20 кг)",
+        keywords: ["шпакловка", "norgips", "sheetrock", "кофа", "финиш"],
+        unit: "бр.",
+        prices: { "Баущоф + Метал": 20.50, "Топливо": 19.97, "Ташев-Галвинг": 21.30 }
+    }
+];
+
+// 2. УМНО ТЪРСЕНЕ: Намира кой продукт от каталога отговаря на текста от офертата
+function matchProduct(userText) {
+    const text = userText.toLowerCase();
+    let bestMatch = null;
+    let maxScore = 0;
+
+    catalogDB.forEach(item => {
+        let score = 0;
+        item.keywords.forEach(kw => {
+            if (text.includes(kw)) score++;
+        });
+        if (score > maxScore) {
+            maxScore = score;
+            bestMatch = item;
+        }
+    });
+    return bestMatch;
+}
+
+// 3. ЧЕТЕНЕ НА КАЧЕН EXCEL ФАЙЛ
+document.getElementById('fileUpload').addEventListener('change', function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = function(event) {
+        const data = new Uint8Array(event.target.result);
+        const workbook = XLSX.read(data, {type: 'array'});
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        // Преобразува първата таблица в редове: Колона А (Продукт) - Колона B (Количество)
+        const rows = XLSX.utils.sheet_to_json(firstSheet, {header: 1});
+        
+        let extractedText = "";
+        rows.forEach(row => {
+            if (row.length >= 2 && row[0] && !isNaN(parseFloat(row[1]))) {
+                extractedText += `${row[0]} - ${row[1]}\n`;
+            }
+        });
+        document.getElementById('manualInput').value = extractedText.trim();
+        processInput();
+    };
+    reader.readAsArrayBuffer(file);
+});
+
+// 4. КАЛКУЛАЦИЯ И СРАВНЕНИЕ НА ЦЕНИТЕ
+function processInput() {
+    const rawText = document.getElementById('manualInput').value.trim();
+    if (!rawText) return;
+
+    const lines = rawText.split('\n');
+    const stores = ["Баущоф + Метал", "Топливо", "Ташев-Галвинг"];
+    let storeTotals = { "Баущоф + Метал": 0, "Топливо": 0, "Ташев-Галвинг": 0 };
+    let optimalSplitTotal = 0;
+
+    let tableHTML = `<table>
+        <thead>
+            <tr>
+                <th>Търсен материал</th>
+                <th>Разпознат продукт в базата</th>
+                <th>Кол.</th>
+                <th>Баущоф + Метал</th>
+                <th>Топливо</th>
+                <th>Ташев-Галвинг</th>
+                <th>Най-изгодно от</th>
+            </tr>
+        </thead>
+        <tbody>`;
+
+    lines.forEach(line => {
+        // Разделя текста на описание и количество (взима последното число в реда за количество)
+        const parts = line.split(/[-–—:;,\t]+/);
+        let qty = 1;
+        let desc = line;
+        
+        if (parts.length > 1) {
+            const parsedQty = parseFloat(parts[parts.length - 1].replace(',', '.'));
+            if (!isNaN(parsedQty)) {
+                qty = parsedQty;
+                desc = parts.slice(0, -1).join(' ');
+            }
+        }
+
+        const matched = matchProduct(desc);
+        if (matched) {
+            let bestStore = "";
+            let minPrice = Infinity;
+
+            stores.forEach(st => {
+                const p = matched.prices[st];
+                storeTotals[st] += p * qty;
+                if (p < minPrice) {
+                    minPrice = p;
+                    bestStore = st;
+                }
+            });
+
+            const bestLineTotal = minPrice * qty;
+            optimalSplitTotal += bestLineTotal;
+
+            tableHTML += `<tr>
+                <td>${desc}</td>
+                <td><b>${matched.name}</b></td>
+                <td>${qty} ${matched.unit}</td>
+                <td class="${bestStore === 'Баущоф + Метал' ? 'best-price' : ''}">${(matched.prices['Баущоф + Метал'] * qty).toFixed(2)} € <small>(${matched.prices['Баущоф + Метал']} €/бр.)</small></td>
+                <td class="${bestStore === 'Топливо' ? 'best-price' : ''}">${(matched.prices['Топливо'] * qty).toFixed(2)} € <small>(${matched.prices['Топливо']} €/бр.)</small></td>
+                <td class="${bestStore === 'Ташев-Галвинг' ? 'best-price' : ''}">${(matched.prices['Ташев-Галвинг'] * qty).toFixed(2)} € <small>(${matched.prices['Ташев-Галвинг']} €/бр.)</small></td>
+                <td><b>${bestStore}</b> (${bestLineTotal.toFixed(2)} €)</td>
+            </tr>`;
+        } else {
+            tableHTML += `<tr>
+                <td>${desc}</td>
+                <td colspan="6" style="color: #c53030;">⚠️ Не е разпознат в каталога (добавете ключови думи)</td>
+            </tr>`;
+        }
+    });
+
+    tableHTML += `</tbody></table>`;
+
+    // Намиране на най-евтиния единичен магазин за цялата поръчка
+    let bestSingleStore = Object.keys(storeTotals).reduce((a, b) => storeTotals[a] < storeTotals[b] ? a : b);
+
+    let summaryHTML = `<div class="summary-grid">
+        <div class="card winner">
+            <h4>🏆 Вариант 1: Комбинирана поръчка (Най-ниска цена)</h4>
+            <p>Купувате всеки материал от там, където е най-евтин:</p>
+            <h3>Общо: ${optimalSplitTotal.toFixed(2)} €</h3>
+        </div>
+        <div class="card">
+            <h4>🚚 Вариант 2: Всичко от един магазин (Пестите транспорт)</h4>
+            <p>Най-изгодно за цялата поръчка наведнъж: <b>${bestSingleStore}</b></p>
+            <h3>Общо: ${storeTotals[bestSingleStore].toFixed(2)} €</h3>
+            <small>
+                Баущоф: ${storeTotals["Баущоф + Метал"].toFixed(2)} € | 
+                Топливо: ${storeTotals["Топливо"].toFixed(2)} € | 
+                Ташев: ${storeTotals["Ташев-Галвинг"].toFixed(2)} €
+            </small>
+        </div>
+    </div>`;
+
+    document.getElementById('results').innerHTML = tableHTML + summaryHTML;
+}
+</script>
+
+</body>
+</html>
